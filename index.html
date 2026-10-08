@@ -8,6 +8,9 @@
 <meta name="apple-mobile-web-app-title" content="Mahlzeiten">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="theme-color" content="#F2F4F0">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" type="image/png" href="icon-192.png">
 <title>Familien-Mahlzeiten</title>
 <style>
 :root{
@@ -176,7 +179,7 @@ const FIREBASE_CONFIG={
   appId:'1:213318403074:web:4e5657ac26ca4866b2931b'
 };
 // =======================================================================
-const APP_VERSION='2.0 (Cloud) · 08.10.2026';
+const APP_VERSION='2.1 (Cloud) · 08.10.2026';
 const CLOUD=!!FIREBASE_CONFIG.apiKey&&!/^DEIN/.test(FIREBASE_CONFIG.apiKey)&&!!FIREBASE_CONFIG.projectId&&!/^DEIN/.test(FIREBASE_CONFIG.projectId);
 const HKEY='family-meals-hid';
 const ls={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}},del(k){try{localStorage.removeItem(k)}catch(e){}}};
@@ -823,14 +826,6 @@ document.addEventListener('pointercancel',()=>finishDrag(true));
 document.addEventListener('touchmove',ev=>{if(drag)ev.preventDefault()},{passive:false});
 document.addEventListener('contextmenu',ev=>{if(ev.target.closest&&ev.target.closest('.slot, .favrow'))ev.preventDefault()});
 
-// Symbol für den Home-Bildschirm
-try{
-  const c=document.createElement('canvas');c.width=c.height=180;const x=c.getContext('2d');
-  x.fillStyle='#2F4BDB';x.fillRect(0,0,180,180);
-  x.fillStyle='#F4D64E';x.beginPath();x.arc(90,90,44,0,Math.PI*2);x.fill();
-  x.fillStyle='#fff';x.beginPath();x.arc(90,90,26,0,Math.PI*2);x.fill();
-  const l=document.createElement('link');l.rel='apple-touch-icon';l.href=c.toDataURL('image/png');document.head.appendChild(l);
-}catch(e){}
 
 render();
 if(CLOUD)startCloud();
