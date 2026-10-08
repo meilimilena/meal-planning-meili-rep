@@ -180,7 +180,7 @@ const FIREBASE_CONFIG={
   appId:'1:213318403074:web:4e5657ac26ca4866b2931b'
 };
 // =======================================================================
-const APP_VERSION='2.5 (Cloud) · 08.10.2026';
+const APP_VERSION='2.6 (Cloud) · 08.10.2026';
 const OPERATOR='Milena Meili';
 const CLOUD=!!FIREBASE_CONFIG.apiKey&&!/^DEIN/.test(FIREBASE_CONFIG.apiKey)&&!!FIREBASE_CONFIG.projectId&&!/^DEIN/.test(FIREBASE_CONFIG.projectId);
 const HKEY='family-meals-hid';
@@ -356,7 +356,7 @@ async function createHousehold(){
   const raw=($('#welcomeCode')||{}).value||'';
   if(raw.trim()){
     try{
-      const inc=decode(raw);if(!inc||typeof inc.meals!=='object')throw new Error('x');
+      const inc=await parseCode(raw);
       state.meals=inc.meals||{};state.library=inc.library||{};state.veg=Array.isArray(inc.veg)?inc.veg:[];state.vegFav=Array.isArray(inc.vegFav)?inc.vegFav:[];
     }catch(e){toast('Der Sicherungscode funktioniert nicht');return}
   }
@@ -450,11 +450,81 @@ function renderWeek(){
   $('#week').innerHTML=h;
 }
 
-function encode(obj){return btoa(unescape(encodeURIComponent(JSON.stringify(obj))))}
-function decode(str){return JSON.parse(decodeURIComponent(escape(atob(str.trim()))))}
+// Sicherungscode: schlank und komprimiert
+function b64bytes(u8){let s='';for(let i=0;i<u8.length;i+=0x8000)s+=String.fromCharCode.apply(null,u8.subarray(i,i+0x8000));return btoa(s)}
+function bytesb64(b){const s=atob(b);const u=new Uint8Array(s.length);for(let i=0;i<s.length;i++)u[i]=s.charCodeAt(i);return u}
+const toUrl=b=>b.replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const fromUrl=b=>{b=b.replace(/-/g,'+').replace(/_/g,'/');while(b.length%4)b+='=';return b};
+async function pipeBytes(u8,stream){const w=stream.writable.getWriter();w.write(u8);w.close();return new Uint8Array(await new Response(stream.readable).arrayBuffer())}
+function slimData(){
+  const lib=state.library,meals={};
+  for(const d in state.meals){
+    meals[d]={};
+    for(const sl in state.meals[d]){
+      const e=state.meals[d][sl];if(!e)continue;
+      const m=lib[(e.name||'').toLowerCase()];
+      const o={name:e.name};
+      if(e.veg&&e.veg.length)o.veg=e.veg;
+      if(!m){if(e.ingredients&&e.ingredients.length)o.ingredients=e.ingredients;if(e.greens)o.greens=true}
+      meals[d][sl]=o;
+    }
+  }
+  return {slim:1,meals,library:state.library,veg:state.veg,vegFav:state.vegFav};
+}
+function expandData(o){
+  if(!o||o.slim!==1)return o;
+  const lib=o.library||{};
+  for(const d in o.meals)for(const sl in o.meals[d]){
+    const e=o.meals[d][sl],m=lib[(e.name||'').toLowerCase()];
+    if(m){e.ingredients=(m.ingredients||[]).slice();e.greens=!!m.greens}
+    else{e.ingredients=e.ingredients||[];e.greens=!!e.greens}
+  }
+  return o;
+}
+async function makeCode(){
+  const utf=new TextEncoder().encode(JSON.stringify(slimData()));
+  if(typeof CompressionStream!=='undefined'){
+    try{return 'FM2:'+toUrl(b64bytes(await pipeBytes(utf,new CompressionStream('deflate'))))}catch(e){}
+  }
+  return 'FM1:'+toUrl(b64bytes(utf));
+}
+async function parseCode(raw){
+  const t=String(raw||'').trim();
+  if(!t)throw new Error('empty');
+  let obj;
+  if(t[0]==='{')obj=JSON.parse(t);
+  else if(t.startsWith('FM2:'))obj=JSON.parse(new TextDecoder().decode(await pipeBytes(bytesb64(fromUrl(t.slice(4))),new DecompressionStream('deflate'))));
+  else if(t.startsWith('FM1:'))obj=JSON.parse(new TextDecoder().decode(bytesb64(fromUrl(t.slice(4)))));
+  else obj=JSON.parse(decodeURIComponent(escape(atob(t))));
+  obj=expandData(obj);
+  if(!obj||typeof obj.meals!=='object')throw new Error('bad');
+  return obj;
+}
+async function doImport(mode){
+  let inc;try{inc=await parseCode($('#inp').value)}catch(e){toast('Dieser Code funktioniert nicht');return}
+  if(mode==='replace'){
+    if(!confirm('Deinen ganzen Plan durch den erhaltenen ersetzen?'))return;
+    state.meals=inc.meals||{};state.library=inc.library||{};state.veg=inc.veg||[];state.vegFav=inc.vegFav||[];
+  }else{
+    for(const k in inc.meals){state.meals[k]=Object.assign(state.meals[k]||{},inc.meals[k])}
+    Object.assign(state.library,inc.library||{});
+    for(const v of (inc.veg||[]))if(!vegHas(v))state.veg.push(v);
+    for(const f of (inc.vegFav||[]))if(!state.vegFav.includes(f))state.vegFav.push(f);
+  }
+  save();toast(mode==='replace'?'Plan ersetzt':'Plan zusammengeführt');tab='week';render();
+}
+async function saveFile(){
+  const data=JSON.stringify({meals:state.meals,library:state.library,veg:state.veg,vegFav:state.vegFav});
+  const name='familien-mahlzeiten-'+keyOf(new Date())+'.json';
+  const file=new File([data],name,{type:'application/json'});
+  try{
+    if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:name});return}
+  }catch(e){if(e&&e.name==='AbortError')return}
+  const a=document.createElement('a');a.href=URL.createObjectURL(file);a.download=name;
+  document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+}
 
 function renderShare(){
-  const code=encode({meals:state.meals,library:state.library,veg:state.veg,vegFav:state.vegFav});
   let h='';
   if(CLOUD&&hid){
     h+=`<div class="panel"><h2>Partner einladen</h2>
@@ -477,14 +547,15 @@ function renderShare(){
     h+='<div class="panel"><h2>Nur auf diesem Gerät</h2><p>Die Cloud ist noch nicht eingerichtet. Deine Daten werden nur auf diesem Gerät gespeichert. Mit der Setup-Anleitung richtest du die Synchronisierung mit deinem Partner ein.</p></div>';
   }
   h+=`<div class="panel"><h2>Sicherung exportieren</h2>
-    <p>Dieser Code enthält deinen ganzen Plan, deine Mahlzeiten und dein Gemüse. Bewahre ihn zum Beispiel in den Notizen auf.</p>
-    <textarea id="out" readonly>${esc(code)}</textarea>
-    <div class="row"><button class="btn" data-a="copy">Code kopieren</button>${navigator.share?'<button class="btn alt" data-a="send">Teilen…</button>':''}</div>
+    <p>Der Code enthält deinen ganzen Plan, deine Mahlzeiten und dein Gemüse. Du kannst ihn kopieren oder als Datei sichern, zum Beispiel in iCloud Drive.</p>
+    <textarea id="out" readonly placeholder="Code wird erstellt …"></textarea>
+    <div class="row"><button class="btn" data-a="copy">Code kopieren</button><button class="btn alt" data-a="saveFile">Als Datei sichern</button></div>
   </div>
   <div class="panel"><h2>Sicherung einspielen</h2>
     <p>«Zusammenführen» ergänzt die Daten aus dem Code bei dir. «Ersetzen» tauscht alles gegen den Code aus.</p>
-    <textarea id="inp" placeholder="Code hier einfügen"></textarea>
-    <div class="row"><button class="btn" data-a="merge">Zusammenführen</button><button class="btn danger" data-a="replace">Ersetzen</button></div>
+    <textarea id="inp" placeholder="Code hier einfügen oder eine Datei wählen"></textarea>
+    <input type="file" id="fileIn" accept=".json,application/json,text/plain" hidden>
+    <div class="row"><button class="btn alt" data-a="pickFile">Datei wählen</button><button class="btn" data-a="merge">Zusammenführen</button><button class="btn danger" data-a="replace">Ersetzen</button></div>
   </div>
   <div class="panel"><h2>Über diese App</h2>
     <p><b>Familien-Mahlzeiten</b> ist eine private App von ${esc(OPERATOR)}, kostenlos und ohne Werbung.</p>
@@ -493,6 +564,7 @@ function renderShare(){
     <p style="margin:0">Version ${APP_VERSION}</p>
   </div>`;
   $('#share').innerHTML=h;
+  makeCode().then(c=>{const el=$('#out');if(el)el.value=c}).catch(()=>{});
 }
 
 // Mahlzeitenliste
@@ -802,28 +874,24 @@ document.addEventListener('click',ev=>{
       break}
     case 'shareLink':navigator.share({title:'Familien-Mahlzeiten',url:inviteLink()}).catch(()=>{});break;
     case 'copy':{
-      const v=$('#out').value;
+      const v=$('#out').value;if(!v){toast('Der Code wird noch erstellt');break}
       (navigator.clipboard?navigator.clipboard.writeText(v):Promise.reject()).then(()=>toast('Code kopiert')).catch(()=>{$('#out').select();document.execCommand('copy');toast('Code kopiert')});
       break}
     case 'send':navigator.share({title:'Mahlzeitenplan',text:$('#out').value}).catch(()=>{});break;
-    case 'merge':case 'replace':{
-      let inc;try{inc=decode($('#inp').value)}catch(e){toast('Dieser Code funktioniert nicht');return}
-      if(!inc||typeof inc.meals!=='object'){toast('Dieser Code funktioniert nicht');return}
-      if(t.dataset.a==='replace'){
-        if(!confirm('Deinen ganzen Plan durch den erhaltenen ersetzen?'))return;
-        state.meals=inc.meals||{};state.library=inc.library||{};state.veg=inc.veg||[];state.vegFav=inc.vegFav||[];
-      }else{
-        for(const k in inc.meals){state.meals[k]=Object.assign(state.meals[k]||{},inc.meals[k])}
-        Object.assign(state.library,inc.library||{});
-        for(const v of (inc.veg||[]))if(!vegHas(v))state.veg.push(v);
-        for(const f of (inc.vegFav||[]))if(!state.vegFav.includes(f))state.vegFav.push(f);
-      }
-      save();toast(t.dataset.a==='replace'?'Plan ersetzt':'Plan zusammengeführt');tab='week';render();break}
+    case 'merge':case 'replace':doImport(t.dataset.a);break;
+    case 'saveFile':saveFile();break;
+    case 'pickFile':$('#fileIn').click();break;
   }
 });
 document.addEventListener('keydown',ev=>{
   if(ev.key!=='Enter')return;
   if(ev.target.id==='vName'){ev.preventDefault();saveVegForm()}
+});
+document.addEventListener('change',ev=>{
+  if(ev.target.id==='fileIn'&&ev.target.files&&ev.target.files[0]){
+    ev.target.files[0].text().then(t=>{$('#inp').value=t;toast('Datei geladen. Jetzt «Zusammenführen» oder «Ersetzen» tippen.')});
+    ev.target.value='';
+  }
 });
 document.addEventListener('input',ev=>{
   if(ev.target.id==='vSearch')$('#vList').innerHTML=vegListHtml(ev.target.value);
