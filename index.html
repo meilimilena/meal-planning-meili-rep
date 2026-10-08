@@ -179,7 +179,7 @@ const FIREBASE_CONFIG={
   appId:'1:213318403074:web:4e5657ac26ca4866b2931b'
 };
 // =======================================================================
-const APP_VERSION='2.1 (Cloud) · 08.10.2026';
+const APP_VERSION='2.2 (Cloud) · 08.10.2026';
 const CLOUD=!!FIREBASE_CONFIG.apiKey&&!/^DEIN/.test(FIREBASE_CONFIG.apiKey)&&!!FIREBASE_CONFIG.projectId&&!/^DEIN/.test(FIREBASE_CONFIG.projectId);
 const HKEY='family-meals-hid';
 const ls={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}},del(k){try{localStorage.removeItem(k)}catch(e){}}};
@@ -286,7 +286,7 @@ function applyRemote(d){
 }
 function leaveLocal(){
   if(cloud.unsub){cloud.unsub();cloud.unsub=null}
-  cloud.ready=false;cloud.ref=null;cloud.base=null;hid=null;ls.del(HKEY);
+  cloud.ready=false;cloud.ref=null;cloud.base=null;hid=null;ls.del(HKEY);undoStack.length=0;
   document.body.classList.remove('ro');render();
 }
 function listen(){
@@ -314,10 +314,19 @@ async function startCloud(){
     cloud.F=F;cloud.db=F.initializeFirestore(app,{localCache:F.persistentLocalCache()});
     cloud.ok=true;
     if(!hid&&hashId)await joinHousehold(hashId);
+    else if(hid&&hashId&&hashId!==hid)await handleHashSwitch(hashId);
     if(hid&&!cloud.unsub)listen();
     else if(!hid){document.body.classList.remove('ro');render()}
   }catch(e){cloudError(e)}
 }
+async function handleHashSwitch(id){
+  if(!id||id===hid||!cloud.ok)return;
+  if(confirm('Dieser Link gehört zu einem anderen Haushalt. Jetzt dorthin wechseln? Dein bisheriger Haushalt bleibt unverändert in der Cloud.'))await joinHousehold(id);
+}
+window.addEventListener('hashchange',()=>{
+  const m=(location.hash||'').match(/h=([a-z0-9]{16,64})/i);
+  if(m)handleHashSwitch(m[1].toLowerCase());
+});
 async function createHousehold(){
   if(!cloud.ok){toast('Verbindung wird aufgebaut …');return}
   const raw=($('#welcomeCode')||{}).value||'';
@@ -338,11 +347,12 @@ async function joinHousehold(raw){
   const id=parseHid(raw);
   if(!id){toast('Link oder Code nicht erkannt');return false}
   if(!cloud.ok){toast('Verbindung wird aufgebaut …');return false}
-  if(hasLocalData()&&!confirm('Auf diesem Gerät sind schon Daten. Beitreten ersetzt sie durch die gemeinsamen Daten. Fortfahren?'))return false;
+  if(id===hid){toast('Du bist schon in diesem Haushalt');return false}
+  if(!hid&&hasLocalData()&&!confirm('Auf diesem Gerät sind schon Daten. Beitreten ersetzt sie durch die gemeinsamen Daten. Fortfahren?'))return false;
   try{
     const snap=await cloud.F.getDoc(cloud.F.doc(cloud.db,'households',id));
     if(!snap.exists()){toast('Haushalt nicht gefunden');return false}
-    hid=id;ls.set(HKEY,id);tab='week';listen();return true;
+    hid=id;ls.set(HKEY,id);undoStack.length=0;updateUndo();tab='week';listen();return true;
   }catch(e){cloudError(e);return false}
 }
 function leaveHousehold(){
@@ -432,6 +442,11 @@ function renderShare(){
     <div class="panel"><h2>Synchronisierung</h2>
       <p>${cloudStatusText()}</p>
       <div class="row" style="margin-top:0"><button class="btn danger" data-a="leaveHousehold">Dieses Gerät trennen</button></div>
+    </div>
+    <div class="panel"><h2>Anderem Haushalt beitreten</h2>
+      <p>Hier wechselst du zu einem anderen Haushalt. Der bisherige bleibt unverändert in der Cloud, und mit seinem Link oder Code kommst du jederzeit zurück.</p>
+      <input type="text" id="joinInput2" placeholder="Link oder Code" autocomplete="off" autocapitalize="off" autocorrect="off">
+      <div class="row"><button class="btn" data-a="joinHousehold2">Wechseln</button></div>
     </div>`;
   }else if(!CLOUD){
     h+='<div class="panel"><h2>Nur auf diesem Gerät</h2><p>Die Cloud ist noch nicht eingerichtet. Deine Daten werden nur auf diesem Gerät gespeichert. Mit der Setup-Anleitung richtest du die Synchronisierung mit deinem Partner ein.</p></div>';
@@ -717,6 +732,7 @@ document.addEventListener('click',ev=>{
     case 'closeSheet':closeSheet();break;
     case 'createHousehold':createHousehold();break;
     case 'joinHousehold':joinHousehold($('#joinInput').value);break;
+    case 'joinHousehold2':joinHousehold($('#joinInput2').value);break;
     case 'leaveHousehold':leaveHousehold();break;
     case 'copyLink':{
       const v=$('#linkOut').value;
