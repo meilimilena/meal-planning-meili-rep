@@ -179,11 +179,22 @@ const FIREBASE_CONFIG={
   appId:'1:213318403074:web:4e5657ac26ca4866b2931b'
 };
 // =======================================================================
-const APP_VERSION='2.2 (Cloud) · 08.10.2026';
+const APP_VERSION='2.3 (Cloud) · 08.10.2026';
 const CLOUD=!!FIREBASE_CONFIG.apiKey&&!/^DEIN/.test(FIREBASE_CONFIG.apiKey)&&!!FIREBASE_CONFIG.projectId&&!/^DEIN/.test(FIREBASE_CONFIG.projectId);
 const HKEY='family-meals-hid';
 const ls={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}},del(k){try{localStorage.removeItem(k)}catch(e){}}};
-let hid=ls.get(HKEY)||null;
+const cookieDir=()=>location.pathname.replace(/[^/]*$/,'')||'/';
+function cookieGet(k){const m=document.cookie.match(new RegExp('(?:^|; )'+k+'=([^;]*)'));return m?decodeURIComponent(m[1]):null}
+function cookieSet(k,v){try{document.cookie=k+'='+encodeURIComponent(v)+'; max-age=31536000; path='+cookieDir()+'; SameSite=Lax'+(location.protocol==='https:'?'; Secure':'')}catch(e){}}
+function cookieDel(k){try{document.cookie=k+'=; max-age=0; path='+cookieDir()}catch(e){}}
+function idbOpen(){return new Promise((res,rej)=>{const r=indexedDB.open('family-meals',1);r.onupgradeneeded=()=>r.result.createObjectStore('kv');r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
+async function idbGet(k){try{const db=await idbOpen();return await new Promise(res=>{const q=db.transaction('kv').objectStore('kv').get(k);q.onsuccess=()=>res(q.result||null);q.onerror=()=>res(null)})}catch(e){return null}}
+async function idbSet(k,v){try{const db=await idbOpen();db.transaction('kv','readwrite').objectStore('kv').put(v,k)}catch(e){}}
+async function idbDel(k){try{const db=await idbOpen();db.transaction('kv','readwrite').objectStore('kv').delete(k)}catch(e){}}
+function saveHid(id){ls.set(HKEY,id);cookieSet(HKEY,id);idbSet(HKEY,id)}
+function clearHid(){ls.del(HKEY);cookieDel(HKEY);idbDel(HKEY)}
+let hid=ls.get(HKEY)||cookieGet(HKEY)||null;
+let recovering=!hid;
 const mh=(location.hash||'').match(/h=([a-z0-9]{16,64})/i);
 const hashId=mh?mh[1].toLowerCase():null;
 const SLOTS=[['lunch','Mittagessen','☀︎'],['dinner','Abendessen','☾']];
@@ -286,11 +297,12 @@ function applyRemote(d){
 }
 function leaveLocal(){
   if(cloud.unsub){cloud.unsub();cloud.unsub=null}
-  cloud.ready=false;cloud.ref=null;cloud.base=null;hid=null;ls.del(HKEY);undoStack.length=0;
+  cloud.ready=false;cloud.ref=null;cloud.base=null;hid=null;clearHid();undoStack.length=0;
   document.body.classList.remove('ro');render();
 }
 function listen(){
   if(cloud.unsub){cloud.unsub();cloud.unsub=null}
+  let healed=false;
   cloud.ready=false;
   cloud.ref=cloud.F.doc(cloud.db,'households',hid);
   document.body.classList.add('ro');
@@ -300,12 +312,20 @@ function listen(){
       return;
     }
     cloud.ready=true;
+    if(!healed){healed=true;saveHid(hid)}
     document.body.classList.remove('ro');setBanner('');
     applyRemote(snap.data());
   },err=>cloudError(err));
 }
 async function startCloud(){
   document.body.classList.add('ro');
+  try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().then(ok=>{cloud.persisted=ok}).catch(()=>{})}catch(e){}
+  if(recovering){
+    const r=await idbGet(HKEY);
+    if(r){hid=r;ls.set(HKEY,r)}
+    recovering=false;
+    if(!hid)render();
+  }
   try{
     const B='https://www.gstatic.com/firebasejs/10.12.2/';
     const [A,Au,F]=await Promise.all([import(B+'firebase-app.js'),import(B+'firebase-auth.js'),import(B+'firebase-firestore.js')]);
@@ -317,7 +337,7 @@ async function startCloud(){
     else if(hid&&hashId&&hashId!==hid)await handleHashSwitch(hashId);
     if(hid&&!cloud.unsub)listen();
     else if(!hid){document.body.classList.remove('ro');render()}
-  }catch(e){cloudError(e)}
+  }catch(e){recovering=false;cloudError(e);render()}
 }
 async function handleHashSwitch(id){
   if(!id||id===hid||!cloud.ok)return;
@@ -339,7 +359,7 @@ async function createHousehold(){
   const id=randomId(24),F=cloud.F;
   try{
     await F.setDoc(F.doc(cloud.db,'households',id),Object.assign(snapObj(),{created:F.serverTimestamp()}));
-    hid=id;ls.set(HKEY,id);store.set(state);
+    hid=id;saveHid(id);store.set(state);
     tab='share';listen();toast('Haushalt angelegt');
   }catch(e){cloudError(e)}
 }
@@ -352,7 +372,7 @@ async function joinHousehold(raw){
   try{
     const snap=await cloud.F.getDoc(cloud.F.doc(cloud.db,'households',id));
     if(!snap.exists()){toast('Haushalt nicht gefunden');return false}
-    hid=id;ls.set(HKEY,id);undoStack.length=0;updateUndo();tab='week';listen();return true;
+    hid=id;saveHid(id);undoStack.length=0;updateUndo();tab='week';listen();return true;
   }catch(e){cloudError(e);return false}
 }
 function leaveHousehold(){
@@ -375,7 +395,7 @@ const slotLabel=s=>s==='lunch'?'Mittagessen':'Abendessen';
 function toast(msg){const t=$('#toast');t.textContent=msg;t.hidden=false;clearTimeout(toast.t);toast.t=setTimeout(()=>t.hidden=true,2200)}
 
 function render(){
-  const needWelcome=CLOUD&&!hid;
+  const needWelcome=CLOUD&&!hid&&!recovering;
   document.body.classList.toggle('welcome',needWelcome);
   $('#welcomeView').hidden=!needWelcome;
   if(needWelcome)return;
@@ -441,6 +461,7 @@ function renderShare(){
     </div>
     <div class="panel"><h2>Synchronisierung</h2>
       <p>${cloudStatusText()}</p>
+      <p style="margin-top:-4px">Gerätespeicher: ${cloud.persisted?'dauerhaft gesichert':'nicht garantiert'}</p>
       <div class="row" style="margin-top:0"><button class="btn danger" data-a="leaveHousehold">Dieses Gerät trennen</button></div>
     </div>
     <div class="panel"><h2>Anderem Haushalt beitreten</h2>
