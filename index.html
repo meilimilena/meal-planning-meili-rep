@@ -91,7 +91,7 @@ main{padding:0 14px}
 textarea,input[type=text]{width:100%;font:16px var(--sans);color:var(--ink);background:var(--paper);border:1.5px solid transparent;border-radius:14px;padding:12px 14px}
 textarea:focus,input[type=text]:focus{outline:none;border-color:var(--green);background:#fff}
 textarea{min-height:96px;resize:vertical}
-#lSearch{background:#fff;box-shadow:0 1px 3px rgba(24,34,28,.1)}
+#lSearch,#vSearch{background:#fff;box-shadow:0 1px 3px rgba(24,34,28,.1)}
 .sortrow{display:flex;gap:6px;overflow-x:auto;margin:0 0 12px;padding:2px 0}
 .sortchip{flex:none;border:0;background:var(--card);border-radius:999px;padding:8px 11px;font:600 13.5px var(--sans);color:var(--muted);box-shadow:0 1px 3px rgba(24,34,28,.1)}
 .sortchip.on{background:var(--green);color:#fff}
@@ -156,6 +156,7 @@ body.ro #undoBtn{pointer-events:none;opacity:.4}
     <input type="text" id="joinInput" placeholder="Link oder Code" autocomplete="off" autocapitalize="off" autocorrect="off">
     <div class="row"><button class="btn" data-a="joinHousehold">Beitreten</button></div>
   </div>
+  <p class="hint" id="welcomeInfo"></p>
 </div>
 <nav class="tabs">
   <button class="tab" data-tab="week">Plan</button>
@@ -179,7 +180,8 @@ const FIREBASE_CONFIG={
   appId:'1:213318403074:web:4e5657ac26ca4866b2931b'
 };
 // =======================================================================
-const APP_VERSION='2.3 (Cloud) · 08.10.2026';
+const APP_VERSION='2.5 (Cloud) · 08.10.2026';
+const OPERATOR='Milena Meili';
 const CLOUD=!!FIREBASE_CONFIG.apiKey&&!/^DEIN/.test(FIREBASE_CONFIG.apiKey)&&!!FIREBASE_CONFIG.projectId&&!/^DEIN/.test(FIREBASE_CONFIG.projectId);
 const HKEY='family-meals-hid';
 const ls={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}},del(k){try{localStorage.removeItem(k)}catch(e){}}};
@@ -209,12 +211,12 @@ const store={
   set(v){mem=v;try{localStorage.setItem(KEY,JSON.stringify(v))}catch(e){}}
 };
 let state=store.get()||{meals:{},library:{}};
-state.meals=state.meals||{};state.library=state.library||{};state.veg=state.veg||[];
+state.meals=state.meals||{};state.library=state.library||{};state.veg=state.veg||[];state.vegFav=state.vegFav||[];
 // Cloud (Firebase) und Rückgängig
 const cloud={ok:false,ready:false,F:null,db:null,ref:null,base:null,unsub:null,latest:null,retry:null};
 const clone=o=>JSON.parse(JSON.stringify(o));
 const j=JSON.stringify;
-const snapObj=()=>clone({meals:state.meals,library:state.library,veg:state.veg});
+const snapObj=()=>clone({meals:state.meals,library:state.library,veg:state.veg,vegFav:state.vegFav});
 let lastObj=snapObj();
 const undoStack=[];
 function updateUndo(){const b=$('#undoBtn');if(b)b.disabled=!undoStack.length}
@@ -239,6 +241,7 @@ function undo(){
     });
   }
   if(j(before.veg)!==j(after.veg)&&j(state.veg)===j(after.veg)){state.veg=clone(before.veg);changed=true}
+  if(j(before.vegFav)!==j(after.vegFav)&&j(state.vegFav)===j(after.vegFav)){state.vegFav=clone(before.vegFav||[]);changed=true}
   lastObj=snapObj();persist();render();
   toast(changed?'Rückgängig gemacht':'Wurde inzwischen geändert, nichts zurückgesetzt');
 }
@@ -278,6 +281,7 @@ async function pushRemote(){
     });
   }
   if(j(base.veg)!==j(cur.veg)){args.push('veg');args.push(cur.veg)}
+  if(j(base.vegFav)!==j(cur.vegFav)){args.push('vegFav');args.push(cur.vegFav)}
   if(!args.length)return;
   cloud.base=cur;
   try{await F.updateDoc(cloud.ref,...args)}catch(e){cloudError(e);toast('Speichern fehlgeschlagen')}
@@ -285,8 +289,8 @@ async function pushRemote(){
 function applyRemote(d){
   cloud.latest=d;
   if(typeof drag!=='undefined'&&drag){clearTimeout(cloud.retry);cloud.retry=setTimeout(()=>applyRemote(cloud.latest),400);return}
-  state.meals=d.meals||{};state.library=d.library||{};state.veg=Array.isArray(d.veg)?d.veg:[];
-  cloud.base=clone({meals:state.meals,library:state.library,veg:state.veg});
+  state.meals=d.meals||{};state.library=d.library||{};state.veg=Array.isArray(d.veg)?d.veg:[];state.vegFav=Array.isArray(d.vegFav)?d.vegFav:[];
+  cloud.base=clone({meals:state.meals,library:state.library,veg:state.veg,vegFav:state.vegFav});
   lastObj=snapObj();
   store.set(state);
   const q1=tab==='lib'&&$('#lSearch')?$('#lSearch').value:'';
@@ -353,7 +357,7 @@ async function createHousehold(){
   if(raw.trim()){
     try{
       const inc=decode(raw);if(!inc||typeof inc.meals!=='object')throw new Error('x');
-      state.meals=inc.meals||{};state.library=inc.library||{};state.veg=Array.isArray(inc.veg)?inc.veg:[];
+      state.meals=inc.meals||{};state.library=inc.library||{};state.veg=Array.isArray(inc.veg)?inc.veg:[];state.vegFav=Array.isArray(inc.vegFav)?inc.vegFav:[];
     }catch(e){toast('Der Sicherungscode funktioniert nicht');return}
   }
   const id=randomId(24),F=cloud.F;
@@ -398,7 +402,7 @@ function render(){
   const needWelcome=CLOUD&&!hid&&!recovering;
   document.body.classList.toggle('welcome',needWelcome);
   $('#welcomeView').hidden=!needWelcome;
-  if(needWelcome)return;
+  if(needWelcome){$('#welcomeInfo').textContent='Eine private Familien-App von '+OPERATOR+'. Eure Daten liegen bei Google Firebase, die Seite wird über GitHub bereitgestellt. Die Betreiberin hat technisch Zugriff auf die gespeicherten Daten.';return}
   for(const id of ['week','lib','veg','share'])$('#'+id).hidden=tab!==id;
   document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('on',b.dataset.tab===tab));
   $('#nav').hidden=tab!=='week';
@@ -450,7 +454,7 @@ function encode(obj){return btoa(unescape(encodeURIComponent(JSON.stringify(obj)
 function decode(str){return JSON.parse(decodeURIComponent(escape(atob(str.trim()))))}
 
 function renderShare(){
-  const code=encode({meals:state.meals,library:state.library,veg:state.veg});
+  const code=encode({meals:state.meals,library:state.library,veg:state.veg,vegFav:state.vegFav});
   let h='';
   if(CLOUD&&hid){
     h+=`<div class="panel"><h2>Partner einladen</h2>
@@ -482,7 +486,12 @@ function renderShare(){
     <textarea id="inp" placeholder="Code hier einfügen"></textarea>
     <div class="row"><button class="btn" data-a="merge">Zusammenführen</button><button class="btn danger" data-a="replace">Ersetzen</button></div>
   </div>
-  <p class="hint">Version ${APP_VERSION}</p>`;
+  <div class="panel"><h2>Über diese App</h2>
+    <p><b>Familien-Mahlzeiten</b> ist eine private App von ${esc(OPERATOR)}, kostenlos und ohne Werbung.</p>
+    <p><b>Daten:</b> Eure Mahlzeiten und Pläne liegen bei <b>Google Firebase</b> (Datenbank Firestore) im Projekt von ${esc(OPERATOR)}. Zugriff haben alle, die euren Haushalts-Link oder Code kennen. Technisch hat auch die Betreiberin Zugriff.</p>
+    <p><b>Bereitstellung:</b> Die App-Datei wird über <b>GitHub Pages</b> ausgeliefert. Sie enthält keine eurer Daten.</p>
+    <p style="margin:0">Version ${APP_VERSION}</p>
+  </div>`;
   $('#share').innerHTML=h;
 }
 
@@ -636,7 +645,8 @@ function vegCounts(){
 function vegNames(e){
   const names=state.veg.slice();
   ((e&&e.veg)||[]).forEach(v=>{if(!names.some(x=>x.toLowerCase()===v.toLowerCase()))names.push(v)});
-  return names.sort((a,b)=>a.localeCompare(b));
+  const fav=new Set(state.vegFav||[]);
+  return names.sort((a,b)=>(fav.has(b.toLowerCase())-fav.has(a.toLowerCase()))||a.localeCompare(b));
 }
 function addVegName(raw){
   const n=String(raw||'').trim();
@@ -646,15 +656,39 @@ function addVegName(raw){
 }
 function vegListHtml(q){
   q=(q||'').trim().toLowerCase();
-  const all=state.veg.slice().sort((a,b)=>a.localeCompare(b));
-  if(!all.length)return '<div class="empty-note">Noch kein Gemüse in der Liste.<br>Hier sammelst du Gemüse, das du bei Mahlzeiten ergänzen kannst.</div><div class="row" style="justify-content:center"><button class="btn alt" data-a="vegSuggest">Vorschläge einfügen</button></div>';
-  const list=all.filter(v=>!q||v.toLowerCase().includes(q));
-  if(!list.length)return '<div class="empty-note">Kein Gemüse gefunden.</div>';
+  if(!state.veg.length)return '<div class="empty-note">Noch kein Gemüse in der Liste.<br>Hier sammelst du Gemüse, das du bei Mahlzeiten ergänzen kannst.</div><div class="row" style="justify-content:center"><button class="btn alt" data-a="vegSuggest">Vorschläge einfügen</button></div>';
+  const fav=new Set(state.vegFav||[]);
+  const mode=state.vegSort||'fav';
   const counts=vegCounts();
-  return list.map(v=>{const n=counts[v.toLowerCase()]||0;return `<div class="item has-star"><span class="rowbtn">${av(v)}<span class="t">${esc(v)}</span><span class="n">${n?n+'× geplant':''}</span></span><button class="star" data-delveg="${esc(v)}" aria-label="Gemüse löschen" style="font-size:19px">✕</button></div>`}).join('');
+  const idx=new Map(state.veg.map((v,i)=>[v.toLowerCase(),i]));
+  const az=(a,b)=>a.localeCompare(b);
+  const cmp={
+    fav:(a,b)=>(fav.has(b.toLowerCase())-fav.has(a.toLowerCase()))||az(a,b),
+    az,
+    new:(a,b)=>idx.get(b.toLowerCase())-idx.get(a.toLowerCase()),
+    count:(a,b)=>((counts[b.toLowerCase()]||0)-(counts[a.toLowerCase()]||0))||az(a,b)
+  }[mode]||az;
+  const list=state.veg.filter(v=>!q||v.toLowerCase().includes(q)).sort(cmp);
+  if(!list.length)return '<div class="empty-note">Kein Gemüse gefunden.</div>';
+  return list.map(v=>{
+    const low=v.toLowerCase(),n=counts[low]||0,f=fav.has(low);
+    return `<div class="item has-star"><span class="rowbtn">${av(v)}<span class="t">${esc(v)}</span><span class="n">${n?n+'× geplant':''}</span></span><button class="star ${f?'on':''}" data-vegfav="${esc(v)}" aria-label="${f?'Aus Favoriten entfernen':'Zu Favoriten hinzufügen'}">${f?'★':'☆'}</button><button class="star" data-delveg="${esc(v)}" aria-label="Gemüse löschen" style="font-size:19px;min-width:44px;padding:0 14px 0 6px">✕</button></div>`;
+  }).join('');
 }
 function renderVeg(){
-  $('#veg').innerHTML='<div class="row" style="margin:0 0 12px;flex-wrap:nowrap"><input type="text" id="vSearch" placeholder="Gemüse suchen" autocomplete="off"><button class="btn" data-a="newVeg" style="white-space:nowrap">+ Neu</button></div><div id="vList">'+vegListHtml('')+'</div>';
+  const cur=state.vegSort||'fav';
+  const modes=[['fav','★ Favoriten'],['az','A–Z'],['new','Neueste'],['count','Häufigste']];
+  const sortRow='<div class="sortrow">'+modes.map(([m,l])=>`<button class="sortchip ${m===cur?'on':''}" data-vsort="${m}">${l}</button>`).join('')+'</div>';
+  $('#veg').innerHTML='<div class="row" style="margin:0 0 12px;flex-wrap:nowrap"><input type="text" id="vSearch" placeholder="Gemüse suchen" autocomplete="off"><button class="btn" data-a="newVeg" style="white-space:nowrap">+ Neu</button></div>'+sortRow+'<div id="vList">'+vegListHtml('')+'</div>';
+}
+function toggleVegFav(name){
+  const low=name.toLowerCase();
+  state.vegFav=state.vegFav||[];
+  const i=state.vegFav.indexOf(low);
+  if(i>=0)state.vegFav.splice(i,1);else state.vegFav.push(low);
+  save();
+  const q=$('#vSearch');$('#vList').innerHTML=vegListHtml(q?q.value:'');
+  toast(i>=0?'Aus Favoriten entfernt':name+' ist ein Favorit');
 }
 function drawVeg(){
   const {k,s}=ctx;const e=getSlot(k,s)||{name:''};
@@ -726,8 +760,15 @@ document.addEventListener('click',ev=>{
     if(ctx.sel.has(n))ctx.sel.delete(n);else ctx.sel.add(n);
     t.classList.toggle('on');return;
   }
+  if(t.dataset.vsort){
+    state.vegSort=t.dataset.vsort;store.set(state);
+    document.querySelectorAll('[data-vsort]').forEach(b=>b.classList.toggle('on',b.dataset.vsort===state.vegSort));
+    const q=$('#vSearch');$('#vList').innerHTML=vegListHtml(q?q.value:'');return;
+  }
+  if(t.dataset.vegfav){toggleVegFav(t.dataset.vegfav);return}
   if(t.dataset.delveg){
     state.veg=state.veg.filter(v=>v!==t.dataset.delveg);
+    state.vegFav=(state.vegFav||[]).filter(f=>f!==t.dataset.delveg.toLowerCase());
     save();render();toast('Gemüse gelöscht');return;
   }
   if(t.dataset.greens){toggleGreens(t.dataset.greens);return}
@@ -770,11 +811,12 @@ document.addEventListener('click',ev=>{
       if(!inc||typeof inc.meals!=='object'){toast('Dieser Code funktioniert nicht');return}
       if(t.dataset.a==='replace'){
         if(!confirm('Deinen ganzen Plan durch den erhaltenen ersetzen?'))return;
-        state.meals=inc.meals||{};state.library=inc.library||{};state.veg=inc.veg||[];
+        state.meals=inc.meals||{};state.library=inc.library||{};state.veg=inc.veg||[];state.vegFav=inc.vegFav||[];
       }else{
         for(const k in inc.meals){state.meals[k]=Object.assign(state.meals[k]||{},inc.meals[k])}
         Object.assign(state.library,inc.library||{});
         for(const v of (inc.veg||[]))if(!vegHas(v))state.veg.push(v);
+        for(const f of (inc.vegFav||[]))if(!state.vegFav.includes(f))state.vegFav.push(f);
       }
       save();toast(t.dataset.a==='replace'?'Plan ersetzt':'Plan zusammengeführt');tab='week';render();break}
   }
